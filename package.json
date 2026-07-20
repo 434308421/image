@@ -1,0 +1,13 @@
+{
+  "name": "gptimage2-web",
+  "private": true,
+  "version": "1.0.0",
+  "description": "OpenAI-compatible gpt-image-2 web UI on Cloudflare Pages",
+  "scripts": {
+    "dev": "wrangler pages dev public --compatibility-date=2024-11-01",
+    "deploy": "wrangler pages deploy public --project-name=gptimage2-web"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}

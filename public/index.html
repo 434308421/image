@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>GPT Image 2 · 生图</title>
+  <meta name="description" content="基于 OpenAI 兼容接口的 gpt-image-2 生图工具" />
+  <link rel="stylesheet" href="./styles.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;600;700&display=swap" rel="stylesheet" />
+</head>
+<body>
+  <div class="bg-grid" aria-hidden="true"></div>
+  <div class="app">
+    <header class="top">
+      <div class="brand">
+        <div class="mark" aria-hidden="true">GI2</div>
+        <div>
+          <h1>GPT Image 2</h1>
+          <p class="sub">提示词 · 尺寸 · 清晰度 · 参考图 · 历史</p>
+        </div>
+      </div>
+      <div class="top-actions">
+        <button type="button" id="tab-create" class="tab is-active" data-tab="create">生成</button>
+        <button type="button" id="tab-history" class="tab" data-tab="history">历史 <span id="history-count" class="badge">0</span></button>
+      </div>
+    </header>
+
+    <main>
+      <section id="panel-create" class="panel is-active">
+        <div class="layout">
+          <form id="gen-form" class="card form-card" autocomplete="off">
+            <label class="field">
+              <span class="label">访问密码</span>
+              <input id="password" name="password" type="password" placeholder="输入访问密码" required />
+            </label>
+
+            <label class="field">
+              <span class="label">提示词</span>
+              <textarea id="prompt" name="prompt" rows="6" placeholder="描述你想生成的画面，越具体越好…" required></textarea>
+            </label>
+
+            <div class="row-2">
+              <label class="field">
+                <span class="label">尺寸（画幅）</span>
+                <div class="seg" role="radiogroup" aria-label="尺寸">
+                  <button type="button" class="seg-btn is-active" data-aspect="3:4">3:4</button>
+                  <button type="button" class="seg-btn" data-aspect="4:3">4:3</button>
+                  <button type="button" class="seg-btn" data-aspect="9:16">9:16</button>
+                  <button type="button" class="seg-btn" data-aspect="16:9">16:9</button>
+                </div>
+                <input type="hidden" id="aspect" name="aspect" value="3:4" />
+              </label>
+
+              <label class="field">
+                <span class="label">清晰度</span>
+                <div class="seg" role="radiogroup" aria-label="清晰度">
+                  <button type="button" class="seg-btn is-active" data-quality="1k">1K</button>
+                  <button type="button" class="seg-btn" data-quality="2k">2K</button>
+                  <button type="button" class="seg-btn" data-quality="4k">4K</button>
+                </div>
+                <input type="hidden" id="quality" name="quality" value="1k" />
+              </label>
+            </div>
+
+            <div class="row-2">
+              <label class="field">
+                <span class="label">生成数量</span>
+                <div class="stepper">
+                  <button type="button" id="n-dec" class="icon-btn" aria-label="减少">−</button>
+                  <input id="n" name="n" type="number" min="1" max="4" value="1" readonly />
+                  <button type="button" id="n-inc" class="icon-btn" aria-label="增加">+</button>
+                </div>
+              </label>
+
+              <label class="field">
+                <span class="label">参考图 <span class="hint">可选</span></span>
+                <div class="upload">
+                  <input id="image" name="image" type="file" accept="image/png,image/jpeg,image/webp" />
+                  <div id="upload-ui" class="upload-ui">
+                    <span id="upload-text">点击或拖入图片</span>
+                    <span class="hint">PNG / JPEG / WebP · ≤10MB</span>
+                  </div>
+                  <div id="upload-preview" class="upload-preview hidden">
+                    <img id="preview-img" alt="参考图预览" />
+                    <button type="button" id="clear-image" class="chip-btn">移除</button>
+                  </div>
+                </div>
+              </label>
+            </div>
+
+            <div class="form-actions">
+              <button type="submit" id="submit-btn" class="primary">
+                <span class="btn-label">开始生成</span>
+              </button>
+              <p id="form-status" class="status" role="status" aria-live="polite"></p>
+            </div>
+          </form>
+
+          <section class="card result-card">
+            <div class="result-head">
+              <h2>本次结果</h2>
+              <div class="result-actions">
+                <button type="button" id="download-all" class="ghost" disabled>全部下载</button>
+              </div>
+            </div>
+            <div id="result-empty" class="empty">
+              <p>生成后图片会出现在这里</p>
+              <p class="hint">历史会自动保存在本浏览器，可随时回看、下载、复制提示词</p>
+            </div>
+            <div id="result-grid" class="grid hidden"></div>
+          </section>
+        </div>
+      </section>
+
+      <section id="panel-history" class="panel">
+        <div class="card history-card">
+          <div class="result-head">
+            <h2>历史记录</h2>
+            <div class="result-actions">
+              <button type="button" id="clear-history" class="ghost danger">清空历史</button>
+            </div>
+          </div>
+          <div id="history-empty" class="empty">
+            <p>还没有历史记录</p>
+            <p class="hint">生成成功后会自动写入本地历史（仅保存在你当前浏览器）</p>
+          </div>
+          <div id="history-list" class="history-list hidden"></div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="foot">
+      <span>模型固定 gpt-image-2 · 密钥仅存服务端</span>
+    </footer>
+  </div>
+
+  <dialog id="lightbox" class="lightbox">
+    <form method="dialog" class="lightbox-inner">
+      <img id="lightbox-img" alt="大图预览" />
+      <div class="lightbox-actions">
+        <button value="close" class="ghost">关闭</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="./app.js"></script>
+</body>
+</html>

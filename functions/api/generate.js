@@ -4,151 +4,115 @@
  * Model fixed: gpt-image-2
  */
 
-const MODEL = "gpt-image-2";
-const MAX_N = 4;
-const MAX_PROMPT_LEN = 4000;
-const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
-const ALLOWED_IMAGE_TYPES = new Set([
-  "image/png",
-  "image/jpeg",
-  "image/jpg",
-  "image/webp",
-]);
+import {
+  ALLOWED_IMAGE_TYPES,
+  ASPECTS,
+  MAX_IMAGE_BYTES,
+  MAX_N,
+  MAX_PROMPT_LEN,
+  MODEL,
+  QUALITIES,
+  QUALITY_ALIAS,
+  SIZE_TABLE,
+  UPSTREAM_TIMEOUT_MS,
+  buildGenerationBody,
+  buildImageForm,
+  checkPasswordFailures,
+  checkRateLimit,
+  clearPasswordFailures,
+  clientIp,
+  extractImages,
+  hydrateRemoteImages,
+  json,
+  normalizeBaseUrl,
+  parseUpstreamError,
+  recordPasswordFailure,
+  safeErrorMessage,
+  timingSafeEqual,
+} from "../lib/common.js";
 
-// 画幅 × 清晰度 → 像素 size（OpenAI 兼容常见写法）
-const SIZE_TABLE = {
-  "1k": {
-    "3:4": "768x1024",
-    "4:3": "1024x768",
-    "9:16": "576x1024",
-    "16:9": "1024x576",
-  },
-  "2k": {
-    "3:4": "1024x1365",
-    "4:3": "1365x1024",
-    "9:16": "768x1365",
-    "16:9": "1365x768",
-  },
-  "4k": {
-    "3:4": "1536x2048",
-    "4:3": "2048x1536",
-    "9:16": "1152x2048",
-    "16:9": "2048x1152",
-  },
-};
+function sameOriginHeaders(request) {
+  return {
+    "access-control-allow-origin": new URL(request.url).origin,
+    "access-control-allow-methods": "POST, OPTIONS",
+    "access-control-allow-headers": "content-type",
+    "access-control-max-age": "86400",
+    vary: "Origin",
+  };
+}
 
-// 同时附带 low/medium/high，兼容只认这套 quality 的上游
-const QUALITY_ALIAS = {
-  "1k": "low",
-  "2k": "medium",
-  "4k": "high",
-};
-
-const ASPECTS = new Set(["3:4", "4:3", "9:16", "16:9"]);
-const QUALITIES = new Set(["1k", "2k", "4k"]);
-
-function json(data, status = 200) {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: {
-      "content-type": "application/json; charset=utf-8",
-      "cache-control": "no-store",
-    },
+async function postUpstream({ url, apiKey, body, isForm, signal }) {
+  const headers = { Authorization: `Bearer ${apiKey}` };
+  if (!isForm) headers["Content-Type"] = "application/json";
+  return fetch(url, {
+    method: "POST",
+    headers,
+    body: isForm ? body : JSON.stringify(body),
+    signal,
   });
 }
 
-function normalizeBaseUrl(raw) {
-  if (!raw) return "";
-  return String(raw).trim().replace(/\/+$/, "");
+function looksLikeQualitySizeError(text) {
+  return /quality|size|invalid|aspect/i.test(text || "");
 }
 
-function safeErrorMessage(err) {
-  const msg = err && err.message ? String(err.message) : "未知错误";
-  return msg.replace(/sk-[a-zA-Z0-9_-]+/g, "[REDACTED]");
-}
+async function postWithQualityRetry({
+  baseUrl,
+  path,
+  apiKey,
+  signal,
+  isForm,
+  buildBody,
+  primaryQuality,
+  aliasQuality,
+}) {
+  let res = await postUpstream({
+    url: `${baseUrl}${path}`,
+    apiKey,
+    body: buildBody(primaryQuality),
+    isForm,
+    signal,
+  });
 
-async function parseUpstreamError(res) {
-  const text = await res.text();
-  try {
-    const data = JSON.parse(text);
-    const msg =
-      data?.error?.message ||
-      data?.message ||
-      data?.error ||
-      text ||
-      `上游错误 ${res.status}`;
-    return String(msg).replace(/sk-[a-zA-Z0-9_-]+/g, "[REDACTED]");
-  } catch {
-    return (text || `上游错误 ${res.status}`).replace(
-      /sk-[a-zA-Z0-9_-]+/g,
-      "[REDACTED]",
-    );
+  if (res.ok || (res.status !== 400 && res.status !== 422)) {
+    return res;
   }
-}
 
-function extractImages(payload) {
-  const list = Array.isArray(payload?.data)
-    ? payload.data
-    : Array.isArray(payload?.images)
-      ? payload.images
-      : [];
+  const errText = await res.clone().text();
+  if (!looksLikeQualitySizeError(errText)) return res;
 
-  const images = [];
-  for (const item of list) {
-    if (!item || typeof item !== "object") continue;
-    if (item.b64_json) {
-      images.push({ b64_json: item.b64_json });
-      continue;
-    }
-    if (item.b64) {
-      images.push({ b64_json: item.b64 });
-      continue;
-    }
-    if (item.url) {
-      images.push({ url: item.url });
-      continue;
-    }
-    if (typeof item === "string") {
-      if (item.startsWith("http")) images.push({ url: item });
-      else images.push({ b64_json: item });
-    }
-  }
-  return images;
-}
-
-async function hydrateRemoteImages(images) {
-  const out = [];
-  for (const img of images) {
-    if (img.b64_json) {
-      out.push({ b64_json: img.b64_json });
-      continue;
-    }
-    if (!img.url) continue;
-    try {
-      const res = await fetch(img.url);
-      if (!res.ok) {
-        out.push({ url: img.url });
-        continue;
-      }
-      const buf = await res.arrayBuffer();
-      const bytes = new Uint8Array(buf);
-      let binary = "";
-      const chunk = 0x8000;
-      for (let i = 0; i < bytes.length; i += chunk) {
-        binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
-      }
-      out.push({ b64_json: btoa(binary) });
-    } catch {
-      out.push({ url: img.url });
-    }
-  }
-  return out;
+  return postUpstream({
+    url: `${baseUrl}${path}`,
+    apiKey,
+    body: buildBody(aliasQuality),
+    isForm,
+    signal,
+  });
 }
 
 export async function onRequestPost(context) {
   const { request, env } = context;
+  const ip = clientIp(request);
 
   try {
+    const rate = checkRateLimit(ip);
+    if (!rate.ok) {
+      return json(
+        { error: rate.error },
+        429,
+        { "retry-after": String(rate.retryAfter) },
+      );
+    }
+
+    const failGate = checkPasswordFailures(ip);
+    if (!failGate.ok) {
+      return json(
+        { error: failGate.error },
+        429,
+        { "retry-after": String(failGate.retryAfter) },
+      );
+    }
+
     const baseUrl = normalizeBaseUrl(env.BASE_URL);
     const apiKey = env.API_KEY;
     const accessPassword = env.ACCESS_PASSWORD;
@@ -173,13 +137,13 @@ export async function onRequestPost(context) {
     const nRaw = String(form.get("n") || "1").trim();
     const imageFile = form.get("image");
 
-    if (password !== accessPassword) {
+    if (!timingSafeEqual(password, accessPassword)) {
+      recordPasswordFailure(ip);
       return json({ error: "访问密码错误" }, 401);
     }
+    clearPasswordFailures(ip);
 
-    if (!prompt) {
-      return json({ error: "请填写提示词" }, 400);
-    }
+    if (!prompt) return json({ error: "请填写提示词" }, 400);
     if (prompt.length > MAX_PROMPT_LEN) {
       return json({ error: `提示词过长（最多 ${MAX_PROMPT_LEN} 字）` }, 400);
     }
@@ -216,111 +180,79 @@ export async function onRequestPost(context) {
 
     const pixelSize = SIZE_TABLE[qualityRaw][aspect];
     const qualityAlias = QUALITY_ALIAS[qualityRaw];
-    // 上游常见两种：quality=1K/2K/4K 或 low/medium/high
     const qualityForApi = qualityRaw.toUpperCase();
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 120000);
+    const timeout = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
 
     let upstreamRes;
     try {
       if (hasReference) {
-        // 有参考图：优先走 images/edits（multipart）
-        const upstreamForm = new FormData();
-        upstreamForm.append("model", MODEL);
-        upstreamForm.append("prompt", prompt);
-        upstreamForm.append("n", String(n));
-        upstreamForm.append("size", pixelSize);
-        upstreamForm.append("quality", qualityForApi);
-        // 兼容字段：部分站认 aspect_ratio / response_format
-        upstreamForm.append("aspect_ratio", aspect);
-        upstreamForm.append("response_format", "b64_json");
-        upstreamForm.append(
-          "image",
-          new File([referenceBlob], referenceName, { type: referenceType }),
-        );
+        const makeForm = (qualityValue) =>
+          buildImageForm({
+            prompt,
+            n,
+            pixelSize,
+            qualityValue,
+            aspect,
+            referenceBlob,
+            referenceName,
+            referenceType,
+          });
 
-        upstreamRes = await fetch(`${baseUrl}/v1/images/edits`, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${apiKey}`,
-          },
-          body: upstreamForm,
+        upstreamRes = await postWithQualityRetry({
+          baseUrl,
+          path: "/v1/images/edits",
+          apiKey,
           signal: controller.signal,
+          isForm: true,
+          primaryQuality: qualityForApi,
+          aliasQuality: qualityAlias,
+          buildBody: makeForm,
         });
 
-        // 若 edits 不存在，回退到 generations + 仍带 image（部分兼容站这样实现图生图）
+        // edits 不支持时回退 generations + image
         if (upstreamRes.status === 404 || upstreamRes.status === 405) {
-          const fallbackForm = new FormData();
-          fallbackForm.append("model", MODEL);
-          fallbackForm.append("prompt", prompt);
-          fallbackForm.append("n", String(n));
-          fallbackForm.append("size", pixelSize);
-          fallbackForm.append("quality", qualityForApi);
-          fallbackForm.append("aspect_ratio", aspect);
-          fallbackForm.append("response_format", "b64_json");
-          fallbackForm.append(
-            "image",
-            new File([referenceBlob], referenceName, { type: referenceType }),
-          );
-
-          upstreamRes = await fetch(`${baseUrl}/v1/images/generations`, {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${apiKey}`,
-            },
-            body: fallbackForm,
+          upstreamRes = await postWithQualityRetry({
+            baseUrl,
+            path: "/v1/images/generations",
+            apiKey,
             signal: controller.signal,
+            isForm: true,
+            primaryQuality: qualityForApi,
+            aliasQuality: qualityAlias,
+            buildBody: makeForm,
           });
         }
       } else {
-        const body = {
-          model: MODEL,
-          prompt,
-          n,
-          size: pixelSize,
-          quality: qualityForApi,
-          aspect_ratio: aspect,
-          response_format: "b64_json",
-        };
-
-        upstreamRes = await fetch(`${baseUrl}/v1/images/generations`, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${apiKey}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(body),
+        upstreamRes = await postWithQualityRetry({
+          baseUrl,
+          path: "/v1/images/generations",
+          apiKey,
           signal: controller.signal,
-        });
-
-        // 若上游不认 1K/2K/4K，自动用 low/medium/high 重试一次
-        if (!upstreamRes.ok && (upstreamRes.status === 400 || upstreamRes.status === 422)) {
-          const errText = await upstreamRes.clone().text();
-          if (/quality|size|invalid/i.test(errText)) {
-            const retryBody = {
-              model: MODEL,
+          isForm: false,
+          primaryQuality: qualityForApi,
+          aliasQuality: qualityAlias,
+          buildBody: (qualityValue) =>
+            buildGenerationBody({
               prompt,
               n,
-              size: pixelSize,
-              quality: qualityAlias,
-              response_format: "b64_json",
-            };
-            upstreamRes = await fetch(`${baseUrl}/v1/images/generations`, {
-              method: "POST",
-              headers: {
-                Authorization: `Bearer ${apiKey}`,
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify(retryBody),
-              signal: controller.signal,
-            });
-          }
-        }
+              pixelSize,
+              qualityValue,
+              aspect,
+              includeAspect: qualityValue === qualityForApi,
+            }),
+        });
       }
     } catch (err) {
       if (err && err.name === "AbortError") {
-        return json({ error: "生成超时，请稍后重试或降低清晰度/张数" }, 504);
+        return json(
+          {
+            error:
+              "生成超时（约 120 秒）。请稍后重试，或降低清晰度/张数（4K 与多张会更慢）",
+          },
+          504,
+        );
       }
       return json({ error: `请求上游失败：${safeErrorMessage(err)}` }, 502);
     } finally {
@@ -338,7 +270,6 @@ export async function onRequestPost(context) {
       return json({ error: "上游未返回图片数据" }, 502);
     }
 
-    // 若只有 URL，尽量转成 base64，方便前端历史存档
     if (images.some((x) => x.url && !x.b64_json)) {
       images = await hydrateRemoteImages(images);
     }
@@ -357,14 +288,9 @@ export async function onRequestPost(context) {
   }
 }
 
-export async function onRequestOptions() {
+export async function onRequestOptions(context) {
   return new Response(null, {
     status: 204,
-    headers: {
-      "access-control-allow-origin": "*",
-      "access-control-allow-methods": "POST, OPTIONS",
-      "access-control-allow-headers": "content-type",
-      "access-control-max-age": "86400",
-    },
+    headers: sameOriginHeaders(context.request),
   });
 }

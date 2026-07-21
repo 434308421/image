@@ -14,9 +14,9 @@
   --warn: #9a6700;
   --shadow: 0 1px 2px rgba(40, 35, 25, 0.04), 0 12px 32px rgba(40, 35, 25, 0.06);
   --radius: 16px;
-  --font: "Noto Sans SC", "Segoe UI", system-ui, sans-serif;
-  --display: "Noto Sans SC", "Segoe UI", system-ui, sans-serif;
-  --mono: "IBM Plex Mono", ui-monospace, monospace;
+  --font: "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  --display: "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  --mono: ui-monospace, "Cascadia Mono", "Consolas", monospace;
 }
 
 * { box-sizing: border-box; }
@@ -554,4 +554,97 @@ input:focus, textarea:focus {
   .row-2 { grid-template-columns: 1fr; }
   .top { flex-direction: column; align-items: stretch; }
   .top-actions { width: fit-content; }
+}
+
+.check-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: -6px 0 14px;
+  color: var(--muted);
+  font-size: 0.86rem;
+  user-select: none;
+}
+
+.check-row input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+}
+
+.field-hint {
+  margin: 0;
+}
+
+.btn-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.btn-row .primary {
+  width: 100%;
+}
+
+.btn-row .ghost {
+  min-width: 88px;
+}
+
+.upload.is-dragover {
+  border-color: rgba(201, 100, 66, 0.7);
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px rgba(201, 100, 66, 0.15);
+}
+
+.result-meta {
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-size: 0.86rem;
+  font-family: var(--mono);
+}
+
+.history-tools {
+  display: grid;
+  grid-template-columns: 1.4fr 0.8fr 0.8fr;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.history-tools input[type="search"],
+.history-tools select {
+  width: 100%;
+  border: 1px solid var(--line-strong);
+  background: var(--bg-2);
+  color: var(--text);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font: inherit;
+  outline: none;
+}
+
+.history-tools input:focus,
+.history-tools select:focus {
+  border-color: rgba(201, 100, 66, 0.55);
+  box-shadow: 0 0 0 3px rgba(201, 100, 66, 0.12);
+}
+
+.seg-btn:focus-visible,
+.tab:focus-visible,
+.primary:focus-visible,
+.ghost:focus-visible,
+.icon-btn:focus-visible,
+.chip-btn:focus-visible {
+  outline: 2px solid rgba(201, 100, 66, 0.55);
+  outline-offset: 2px;
+}
+
+.lightbox-actions {
+  gap: 8px;
+}
+
+@media (max-width: 900px) {
+  .history-tools { grid-template-columns: 1fr; }
+  .btn-row { grid-template-columns: 1fr; }
+  .btn-row .ghost { width: 100%; }
 }
